@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Lector de patentes · prototipo</title>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:dark;background:#0d1724;color:#eff5fa}*{box-sizing:border-box}body{margin:0 auto;max-width:560px;padding:22px 17px 65px}h1{font-size:27px;margin:4px 0 6px}.sub{color:#a3b7c9;margin:0 0 22px;line-height:1.45}.card{background:#172638;border:1px solid #2e4155;border-radius:18px;padding:20px;margin:18px 0}.badge{font-size:12px;background:#254d3f;color:#a8f3d0;border-radius:20px;padding:5px 10px;display:inline-block}.button,button{display:block;border:0;border-radius:12px;background:#56cb98;color:#09251b;font-size:16px;font-weight:700;padding:15px 17px;width:100%;margin:12px 0;cursor:pointer;text-align:center}.secondary{background:#273d55;color:#f5faff}.muted,small{color:#a3b7c9}input[type=file]{position:absolute;left:-9999px}img{width:100%;object-fit:contain;max-height:340px;border-radius:12px;margin-top:12px;background:#0a1019}input[type=text]{font-size:28px;font-weight:800;letter-spacing:2px;border-radius:12px;width:100%;text-align:center;background:#0d1724;color:white;border:1px solid #66829e;padding:12px;text-transform:uppercase}label{display:block}#status{min-height:25px;line-height:1.45}.ok{color:#80e9af}.warn{color:#ffca83}.error{color:#ff9090}footer{font-size:12px;line-height:1.5;color:#a3b7c9}#output{display:none}#preview{display:none}progress{width:100%;display:none} 
+</style>
+</head>
+<body>
+<span class="badge">Prototipo local · Sin consulta de encargos</span>
+<h1>Lector de patentes</h1><p class="sub">Fotografía una placa patente y comprueba qué letras y números reconoce el teléfono.</p>
+<section class="card">
+<label for="foto" class="button">📷 Abrir cámara o elegir fotografía</label>
+<input id="foto" type="file" accept="image/*" capture="environment" aria-label="Seleccionar fotografía de patente">
+<p class="muted">Consejo: fotografía la patente de frente, con buena luz y acercándote lo suficiente para que ocupe buena parte de la imagen.</p>
+<img id="preview" alt="Fotografía seleccionada">
+<button id="recognize" style="display:none">Reconocer patente</button>
+<progress id="progress" max="1" value="0"></progress>
+<p id="status" role="status" aria-live="polite">Selecciona una fotografía para comenzar.</p>
+</section>
+<section id="output" class="card"><span class="badge">Lectura OCR</span><h2>Patente detectada</h2><label for="plate">Comprueba y corrige el texto</label><input id="plate" type="text" autocapitalize="characters" autocomplete="off" spellcheck="false" maxlength="9" placeholder="ABCD12"><p id="validation" class="muted"></p><button class="secondary" id="copy">Copiar patente</button><details><summary>Ver texto bruto leído por OCR</summary><pre id="raw" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details></section>
+<footer>No guarda ni envía fotografías a un servidor propio. En esta versión el reconocimiento se realiza dentro del navegador; al utilizarla por primera vez se descarga el motor OCR y sus datos de idioma desde servicios externos. No consultar ni inferir encargos mediante este prototipo. Verifica siempre las lecturas antes de utilizarlas.</footer>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@6/dist/tesseract.min.js"></script>
+<script>
+const el=id=>document.getElementById(id);
+let chosenFile=null,objectUrl=null,worker=null;
+function status(msg,klass=''){el('status').className=klass;el('status').textContent=msg;}
+function normalize(s){return (s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]/g,'');}
+function candidates(raw){const lines=(raw||'').toUpperCase().split(/[\r\n]+/).map(normalize).filter(Boolean);
+ const tokens=[...lines];for (const l of lines){tokens.push(...(l.match(/[A-Z0-9]{5,9}/g)||[]));}
+ const found=[];for(const t of tokens){for(const re of [/[A-Z]{4}[0-9]{2}/g,/[A-Z]{2}[0-9]{4}/g]) {const m=t.match(re);if(m)found.push(...m);}}
+ return [...new Set(found)];}
+function validation(v){const s=normalize(v);el('validation').textContent=/^([A-Z]{4}[0-9]{2}|[A-Z]{2}[0-9]{4})$/.test(s)?'✓ Formato de patente particular compatible. Verifica visualmente sus caracteres.':'⚠ No coincide con los dos formatos de automóvil cubiertos en este prototipo. Puede ser otra clase de placa o una lectura incorrecta.';el('validation').className=/^([A-Z]{4}[0-9]{2}|[A-Z]{2}[0-9]{4})$/.test(s)?'ok':'warn';}
+el('foto').addEventListener('change',e=>{chosenFile=e.target.files?.[0];if(!chosenFile)return;if(objectUrl)URL.revokeObjectURL(objectUrl);objectUrl=URL.createObjectURL(chosenFile);el('preview').src=objectUrl;el('preview').style.display='block';el('recognize').style.display='block';el('output').style.display='none';status('Fotografía cargada. Pulsa «Reconocer patente».');});
+el('recognize').addEventListener('click',async()=>{if(!chosenFile)return;el('recognize').disabled=true;el('progress').style.display='block';el('progress').value=0;try{
+ if(!window.Tesseract)throw new Error('No se pudo descargar Tesseract.js. Comprueba tu conexión a Internet y vuelve a abrir la página.');
+ status('Preparando reconocimiento. La primera vez puede tardar por la descarga del modelo...');
+ if(!worker){worker=await Tesseract.createWorker('eng',1,{logger:m=>{if(m.status)status(m.status+(Number.isFinite(m.progress)?' · '+Math.round(m.progress*100)+'%':''));if(Number.isFinite(m.progress))el('progress').value=m.progress;}});await worker.setParameters({tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',preserve_interword_spaces:'1'});}
+ status('Leyendo imagen...');const result=await worker.recognize(chosenFile);const raw=result.data.text||'';const matches=candidates(raw);el('output').style.display='block';el('raw').textContent=raw||'(Sin texto reconocible)';el('plate').value=matches[0]||normalize(raw).slice(0,9);validation(el('plate').value);status(matches.length?'Lectura terminada. Comprueba visualmente la patente.':'No se detectó una patente compatible automáticamente. Revisa el texto bruto o introduce la patente manualmente.',matches.length?'ok':'warn');
+ }catch(e){status('Error: '+(e?.message||'No se pudo leer la imagen.'),'error');}finally{el('recognize').disabled=false;el('progress').style.display='none';}});
+el('plate').addEventListener('input',()=>validation(el('plate').value));
+el('copy').addEventListener('click',async()=>{const p=normalize(el('plate').value);try{await navigator.clipboard.writeText(p);el('copy').textContent='✓ Copiado';setTimeout(()=>el('copy').textContent='Copiar patente',1800);}catch{el('plate').select();status('Selecciona y copia la patente manualmente.','warn');}});
+</script>
+</body>
+</html>
